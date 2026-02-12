@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Valentine Snake (Pixel Sakura)</title>
+
+  <!-- Google Fonts (romantic + pixel-ish UI) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Press+Start+2P&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg:#0b140f;
+      --ui:#ffffff;
+      --btn:#2b1630;
+      --btn2:#3b1f42;
+    }
+    html,body{
+      margin:0;
+      height:100%;
+      background:var(--bg);
+      overflow:hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      touch-action:none;
+    }
+    #wrap{
+      position:fixed;
+      inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
+    canvas{
+      /* Bigger on desktop; still fits iPad perfectly */
+      width:min(100vw, 1400px);
+      height:auto;
+      max-height:100vh;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background:transparent;
+    }
+
+    /* On-screen D-pad */
+    #hud{
+      position:fixed;
+      left:0;
+      right:0;
+      bottom:0;
+      padding: max(10px, env(safe-area-inset-bottom)) 12px 12px;
+      display:flex;
+      justify-content:center;
+      pointer-events:none;
+    }
+    #dpad{
+      pointer-events:auto;
+      display:grid;
+      grid-template-columns:72px 72px 72px;
+      grid-template-rows:72px 72px 72px;
+      gap:12px;
+      align-items:center;
+      justify-items:center;
+      user-select:none;
+      -webkit-user-select:none;
+    }
+    .btn{
+      width:72px;
+      height:72px;
+      border:2px solid rgba(255,255,255,0.15);
+      border-bottom-color: rgba(0,0,0,0.35);
+      border-right-color: rgba(0,0,0,0.25);
+      border-radius:16px;
+      background:linear-gradient(180deg, var(--btn2), var(--btn));
+      color:var(--ui);
+      font-family:"Press Start 2P", monospace;
+      font-size:20px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      box-shadow: 0 12px 24px rgba(0,0,0,0.25);
+      transform: translateZ(0);
+    }
+    .btn:active{
+      transform: translateY(2px);
+      filter:brightness(1.07);
+    }
+    .btn.hidden{ visibility:hidden; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <!-- Bigger internal canvas = bigger + cleaner on high-res screens -->
+    <canvas id="c" width="512" height="288"></canvas>
+  </div>
+
+  <div id="hud">
+    <div id="dpad" role="group" aria-label="Directional controls">
+      <button class="btn hidden" tabindex="-1" aria-hidden="true"></button>
+      <button class="btn" data-dir="up" aria-label="Up">▲</button>
+      <button class="btn hidden" tabindex="-1" aria-hidden="true"></button>
+
+      <button class="btn" data-dir="left" aria-label="Left">◀</button>
+      <button class="btn hidden" tabindex="-1" aria-hidden="true"></button>
+      <button class="btn" data-dir="right" aria-label="Right">▶</button>
+
+      <button class="btn hidden" tabindex="-1" aria-hidden="true"></button>
+      <button class="btn" data-dir="down" aria-label="Down">▼</button>
+      <button class="btn hidden" tabindex="-1" aria-hidden="true"></button>
+    </div>
+  </div>
+
+  <script>
+  (() => {
+    /**********************************************************************
+     * Valentine Snake (single-file)
+     * Changes requested:
+     * - Bigger canvas (512x288 + bigger CSS max width)
+     * - Animated bird's-eye grass background w/ flowers swaying in wind
+     * - Only separate layers: D-pad, game border/grid, letters/menus
+     * - Target score set to 25
+     **********************************************************************/
+
+    // ====== Canvas setup ======
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+
+    const W = canvas.width;   // 512
+    const H = canvas.height;  // 288
+
+    // ====== Responsive canvas sizing ======
+    function resize() {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const scale = Math.min(vw / W, vh / H);
+
+      canvas.style.width  = Math.floor(W * scale) + 'px';
+      canvas.style.height = Math.floor(H * scale) + 'px';
+    }
+    window.addEventListener('resize', resize, {passive:true});
+    resize();
+
+    // ====== Scenes ======
+    const SCENE = {
+      MENU_CLOSED: 0,
+      MENU_OPEN: 1,
+      GAME: 2,
+      SCROLL_ROLLED: 3,
+      SCROLL_OPEN: 4
+    };
+    let scene = SCENE.MENU_CLOSED;
+
+    // ====== D-pad visibility ======
+    const hud = document.getElementById('hud');
+    function updateHudVisibility() {
+      hud.style.display = (scene === SCENE.GAME) ? 'flex' : 'none';
+    }
+    updateHudVisibility();
+
+    // ====== Small helpers ======
+    function drawPixelRect(g, x, y, w, h, color) {
+      g.fillStyle = color;
+      g.fillRect(x|0, y|0, w|0, h|0);
+    }
+
+    function pixelText(g, text, x, y, size=10, color='#fff', align='center') {
+      g.save();
+      g.font = `${size}px "Press Start 2P", monospace`;
+      g.textAlign = align;
+      g.textBaseline = 'top';
+      g.fillStyle = 'rgba(0,0,0,0.45)';
+      g.fillText(text, x+2, y+2);
+      g.fillStyle = color;
+      g.fillText(text, x, y);
+      g.restore();
+    }
+
+    function fancyText(g, text, x, y, size=26, color='#3a1631', align='center') {
+      g.save();
+      g.font = `${size}px "Great Vibes", cursive`;
+      g.textAlign = align;
+      g.textBaseline = 'top';
+      g.fillStyle = 'rgba(255,255,255,0.35)';
+      g.fillText(text, x+1, y+1);
+      g.fillStyle = color;
+      g.fillText(text, x, y);
+      g.restore();
+    }
+
+    // ====== Pixel heart ======
+    function drawPixelHeart(g, cx, cy, size, pulse=1.0, hasOutline=false) {
+      const mask = [
+        "01100110",
+        "11111111",
+        "11111111",
+        "11111111",
+        "01111110",
+        "00111100",
+        "00011000",
+        "00000000"
+      ];
+      const scale = Math.max(1, (size / 8) * pulse);
+      const ox = (cx - (8*scale)/2) | 0;
+      const oy = (cy - (8*scale)/2) | 0;
+
+      if (hasOutline) {
+        g.fillStyle = 'rgba(40,8,30,0.35)';
+        for (let y=0; y<8; y++) for (let x=0; x<8; x++) {
+          if (mask[y][x] === '1') g.fillRect(ox + x*scale + 1, oy + y*scale + 1, scale, scale);
+        }
+      }
+
+      g.fillStyle = '#ff2f5e';
+      for (let y=0; y<8; y++) for (let x=0; x<8; x++) {
+        if (mask[y][x] === '1') g.fillRect(ox + x*scale, oy + y*scale, scale, scale);
+      }
+
+      g.fillStyle = 'rgba(255,220,230,0.9)';
+      g.fillRect(ox + 2*scale, oy + 2*scale, 2*scale, 1*scale);
+    }
+
+    // ====================================================================
+    // Animated grass background (bird's-eye view)
+    // - Base grass is STATIC cached (fast)
+    // - Flowers + little blades sway using a "wind" sine over time
+    // ====================================================================
+
+    // Tiny deterministic RNG (so flowers stay consistent each load)
+    function mulberry32(seed) {
+      return function() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    const rand = mulberry32(1337);
+
+    // Cache base grass into an offscreen canvas
+    const grassBase = document.createElement('canvas');
+    grassBase.width = W;
+    grassBase.height = H;
+    const gb = grassBase.getContext('2d');
+    gb.imageSmoothingEnabled = false;
+
+    // Pre-generated flower positions (denser near edges)
+    const flowers = [];
+    function initGrass() {
+      // Base green tiles (chunky)
+      for (let y=0; y<H; y+=4) {
+        for (let x=0; x<W; x+=4) {
+          const n = rand();
+          const c = (n < 0.33) ? '#2f8a47' : (n < 0.66) ? '#2a7d40' : '#2d8444';
+          drawPixelRect(gb, x, y, 4, 4, c);
+
+          // occasional darker speck
+          if (rand() < 0.12) drawPixelRect(gb, x+(rand()*3|0), y+(rand()*3|0), 1, 1, 'rgba(10,30,16,0.35)');
+        }
+      }
+
+      // soft vignette (still pixel)
+      gb.fillStyle = 'rgba(0,0,0,0.12)';
+      gb.fillRect(0,0,W,6);
+      gb.fillRect(0,H-6,W,6);
+      gb.fillRect(0,0,6,H);
+      gb.fillRect(W-6,0,6,H);
+
+      // Flowers: scatter, but heavier around edges
+      const count = 90;
+      for (let i=0; i<count; i++) {
+        // edge bias: pick a point, then pull it towards nearest edge
+        let x = (rand()*W)|0;
+        let y = (rand()*H)|0;
+        if (rand() < 0.75) {
+          // push toward edges
+          const edge = (rand()*4)|0;
+          if (edge === 0) y = (rand()*26)|0;                 // top
+          if (edge === 1) y = H-1 - ((rand()*26)|0);          // bottom
+          if (edge === 2) x = (rand()*40)|0;                  // left
+          if (edge === 3) x = W-1 - ((rand()*40)|0);          // right
+        }
+
+        flowers.push({
+          x, y,
+          type: (rand() < 0.5) ? 'pink' : (rand()<0.75 ? 'white' : 'yellow'),
+          phase: rand()*Math.PI*2,
+          sway: 1 + (rand()*2)|0
+        });
+      }
+    }
+    initGrass();
+
+    function drawGrassBackground(g, t) {
+      // Draw cached base first
+      g.drawImage(grassBase, 0, 0);
+
+      // Wind value (slow + subtle)
+      const wind = Math.sin(t*0.9) * 1.2 + Math.sin(t*1.7) * 0.6;
+
+      // Animated little blades (tiny strokes) — subtle, not particles
+      // Keep it light for iPad performance.
+      g.save();
+      g.globalAlpha = 0.55;
+      for (let i=0; i<70; i++) {
+        const x = (i*37 + 19) % W;
+        const y = (i*53 + 11) % H;
+        const sway = ((wind + Math.sin(t + i))*0.6)|0;
+        drawPixelRect(g, x, y, 1, 3, 'rgba(200,255,210,0.25)');
+        drawPixelRect(g, x+sway, y, 1, 3, 'rgba(30,120,70,0.35)');
+      }
+      g.restore();
+
+      // Flowers swaying (each has its own phase)
+      for (const f of flowers) {
+        const s = Math.sin(t*1.1 + f.phase) * (0.8 + 0.4*Math.sin(t*0.7));
+        const dx = (wind*0.6 + s) * f.sway;
+        const px = (f.x + dx) | 0;
+        const py = f.y;
+
+        // stem / leaf
+        drawPixelRect(g, px, py+3, 1, 3, 'rgba(20,90,50,0.55)');
+        if ((f.x + f.y) % 3 === 0) drawPixelRect(g, px-1, py+5, 2, 1, 'rgba(30,130,70,0.35)');
+
+        // blossom (2x2 or 3x3)
+        if (f.type === 'pink') {
+          drawPixelRect(g, px-1, py-1, 3, 3, 'rgba(255,165,200,0.85)');
+          drawPixelRect(g, px, py, 1, 1, 'rgba(255,235,245,0.9)');
+        } else if (f.type === 'white') {
+          drawPixelRect(g, px-1, py-1, 3, 3, 'rgba(255,255,255,0.8)');
+          drawPixelRect(g, px, py, 1, 1, 'rgba(255,210,230,0.8)');
+        } else { // yellow
+          drawPixelRect(g, px-1, py-1, 3, 3, 'rgba(255,230,140,0.85)');
+          drawPixelRect(g, px, py, 1, 1, 'rgba(255,250,210,0.9)');
+        }
+      }
+    }
+
+    // ====================================================================
+    // Menus / letters / scrolls (drawn over the grass)
+    // ====================================================================
+
+    function drawClosedEnvelope(g) {
+      const cx = W/2, cy = H*0.58;
+      const ew = 250, eh = 140;
+      const x = (cx - ew/2)|0, y = (cy - eh/2)|0;
+
+      drawPixelRect(g, x, y, ew, eh, '#f0d3a4');
+      drawPixelRect(g, x+4, y+4, ew-8, eh-8, '#f6e2bf');
+
+      // Flap triangle
+      g.save();
+      g.fillStyle = '#e7c996';
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x+ew, y);
+      g.lineTo(x+ew/2, y+eh/2);
+      g.closePath();
+      g.fill();
+      g.restore();
+
+      // Side folds
+      g.save();
+      g.fillStyle = 'rgba(205,160,110,0.55)';
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x+ew/2, y+eh/2);
+      g.lineTo(x, y+eh);
+      g.closePath();
+      g.fill();
+      g.beginPath();
+      g.moveTo(x+ew, y);
+      g.lineTo(x+ew/2, y+eh/2);
+      g.lineTo(x+ew, y+eh);
+      g.closePath();
+      g.fill();
+      g.restore();
+
+      drawPixelHeart(g, (cx|0), (y+eh/2+16)|0, 16, 1.0, true);
+      pixelText(g, 'Tap to open...', cx, H*0.84, 12, '#ffffff', 'center');
+    }
+
+    function drawOpenLetterScreen(g) {
+      const cx = W/2, cy = H*0.60;
+      const ew = 300, eh = 170;
+      const x = (cx - ew/2)|0, y = (cy - eh/2)|0;
+
+      // Envelope base
+      drawPixelRect(g, x, y+36, ew, eh-36, '#f0d3a4');
+      drawPixelRect(g, x+4, y+40, ew-8, eh-44, '#f6e2bf');
+
+      // TRIANGLE flap (open)
+      g.save();
+      g.fillStyle = '#e7c996';
+      g.beginPath();
+      g.moveTo(x, y+36);
+      g.lineTo(x+ew, y+36);
+      g.lineTo(x+ew/2, y-22);
+      g.closePath();
+      g.fill();
+      g.restore();
+
+      // Paper
+      drawPixelRect(g, x+18, y-8, ew-36, 98, '#fff6ef');
+      drawPixelRect(g, x+20, y-6, ew-40, 94, '#fffaf6');
+
+      // Small blossoms
+      for (const p of [
+        {px:x+26, py:y+6},{px:x+ew-36, py:y+8},
+        {px:x+28, py:y+74},{px:x+ew-38, py:y+72}
+      ]) {
+        drawPixelRect(g, p.px, p.py, 8, 8, '#ffb8cf');
+        drawPixelRect(g, p.px+2, p.py+2, 4, 4, '#ffe6ef');
+      }
+
+      fancyText(g, 'Dear Yara,', cx, y+10, 30, '#3a1631');
+      fancyText(g, 'Collect hearts to reveal', cx, y+42, 24, '#3a1631');
+      fancyText(g, 'something just for you.', cx, y+64, 24, '#3a1631');
+
+      drawPixelHeart(g, (cx|0), (y+118)|0, 12, 1.0, true);
+      pixelText(g, 'Tap to start', cx, H*0.86, 12, '#ffffff', 'center');
+    }
+
+    function drawRolledScroll(g) {
+      const cx = W/2, cy = H*0.60;
+      const sw = 260, sh = 110;
+      const x = (cx - sw/2)|0, y = (cy - sh/2)|0;
+
+      drawPixelRect(g, x, y, sw, sh, '#e9d2a7');
+      drawPixelRect(g, x+4, y+4, sw-8, sh-8, '#f3e3c4');
+
+      // Rolled ends
+      drawPixelRect(g, x-20, y+12, 24, sh-24, '#d8b885');
+      drawPixelRect(g, x+sw-4, y+12, 24, sh-24, '#d8b885');
+      drawPixelRect(g, x-15, y+18, 14, sh-36, '#caa56f');
+      drawPixelRect(g, x+sw+5, y+18, 14, sh-36, '#caa56f');
+
+      // Ribbon
+      drawPixelRect(g, (cx-18)|0, (cy-10)|0, 36, 20, '#ff4b7d');
+      drawPixelRect(g, (cx-14)|0, (cy-6)|0, 28, 12, '#ff7aa0');
+
+      pixelText(g, 'Tap to open...', cx, H*0.84, 12, '#ffffff', 'center');
+    }
+
+    function drawOpenScroll(g) {
+      const cx = W/2, cy = H*0.58;
+      const sw = 330, sh = 170;
+      const x = (cx - sw/2)|0, y = (cy - sh/2)|0;
+
+      drawPixelRect(g, x, y, sw, sh, '#f3e3c4');
+      drawPixelRect(g, x+4, y+4, sw-8, sh-8, '#fff3da');
+
+      for (let i=0;i<sw;i+=10){
+        drawPixelRect(g, x+i, y-4, 8, 4, 'rgba(255,235,205,0.65)');
+        drawPixelRect(g, x+i+2, y+sh, 8, 4, 'rgba(255,235,205,0.55)');
+      }
+
+      fancyText(g, 'Will you be my Valentine?', cx, y+64, 42, '#3a1631');
+      drawPixelHeart(g, (cx|0), (y+132)|0, 14, 1.0, true);
+    }
+
+    // ====================================================================
+    // Snake game config
+    // ====================================================================
+    const TARGET = 25; // <-- requested change
+
+    const grid = {
+      cols: 26,
+      rows: 18,
+      cell: 10, // slightly larger cells to match "bigger" feel
+      x: 0,
+      y: 0
+    };
+
+    // Center grid, leaving top space for counter
+    grid.x = ((W - grid.cols * grid.cell) / 2) | 0;
+    grid.y = ((H - grid.rows * grid.cell) / 2 + 12) | 0;
+
+    let snake = [];
+    let dir = {x:1, y:0};
+    let nextDir = {x:1, y:0};
+    let food = {x:0, y:0};
+    let hearts = 0;
+
+    let lastTime = 0;
+    let acc = 0;
+    const STEP = 0.12;
+
+    function resetGame() {
+      hearts = 0;
+      const sx = 4, sy = 7;
+      snake = [
+        {x:sx, y:sy},
+        {x:sx-1, y:sy},
+        {x:sx-2, y:sy}
+      ];
+      dir = {x:1, y:0};
+      nextDir = {x:1, y:0};
+      placeFood();
+    }
+
+    function placeFood() {
+      while (true) {
+        const x = 1 + (Math.random() * (grid.cols - 2) | 0);
+        const y = 1 + (Math.random() * (grid.rows - 2) | 0);
+        if (!snake.some(s => s.x === x && s.y === y)) {
+          food.x = x; food.y = y;
+          return;
+        }
+      }
+    }
+
+    function isWallCell(x, y) {
+      return (x === 0 || y === 0 || x === grid.cols-1 || y === grid.rows-1);
+    }
+
+    function stepGame() {
+      dir = nextDir;
+
+      const head = snake[0];
+      const nx = head.x + dir.x;
+      const ny = head.y + dir.y;
+
+      if (isWallCell(nx, ny)) { resetGame(); return; }
+      if (snake.some((s, i) => i !== 0 && s.x === nx && s.y === ny)) { resetGame(); return; }
+
+      snake.unshift({x:nx, y:ny});
+
+      if (nx === food.x && ny === food.y) {
+        hearts++;
+        placeFood();
+
+        if (hearts >= TARGET) {
+          scene = SCENE.SCROLL_ROLLED;
+          updateHudVisibility();
+        }
+      } else {
+        snake.pop();
+      }
+    }
+
+    // ====================================================================
+    // Draw: grid, rose border, snake, food, counter
+    // ====================================================================
+    function drawGridFloor(g) {
+      const gx = grid.x, gy = grid.y, cs = grid.cell;
+
+      // Slightly transparent field so grass is visible behind it
+      drawPixelRect(g, gx, gy, grid.cols*cs, grid.rows*cs, 'rgba(255,179,200,0.90)');
+
+      // Gentle checker
+      for (let y=0; y<grid.rows; y++) {
+        for (let x=0; x<grid.cols; x++) {
+          if ((x+y) % 2 === 0) drawPixelRect(g, gx + x*cs, gy + y*cs, cs, cs, 'rgba(255,255,255,0.08)');
+        }
+      }
+
+      // Low opacity grid outlines
+      g.save();
+      g.strokeStyle = 'rgba(255,255,255,0.10)';
+      g.lineWidth = 1;
+      g.beginPath();
+      for (let x=0; x<=grid.cols; x++) {
+        const px = gx + x*cs + 0.5;
+        g.moveTo(px, gy);
+        g.lineTo(px, gy + grid.rows*cs);
+      }
+      for (let y=0; y<=grid.rows; y++) {
+        const py = gy + y*cs + 0.5;
+        g.moveTo(gx, py);
+        g.lineTo(gx + grid.cols*cs, py);
+      }
+      g.stroke();
+      g.restore();
+    }
+
+    function drawRoseBorder(g) {
+      const gx = grid.x, gy = grid.y, cs = grid.cell;
+
+      function roseCell(px, py) {
+        drawPixelRect(g, px, py, cs, cs, '#2c7a3f');
+        drawPixelRect(g, px+1, py+1, cs-2, cs-2, '#2f8a47');
+        drawPixelRect(g, px+1, py+(cs/2|0), cs-2, 2, '#1f5a2e');
+
+        // Rose blossom
+        drawPixelRect(g, px+(cs/2|0)-2, py+2, 5, 5, '#ff315f');
+        drawPixelRect(g, px+(cs/2|0)-1, py+3, 3, 3, '#ffd0db');
+
+        // Tiny spark
+        drawPixelRect(g, px+2, py+cs-3, 2, 2, 'rgba(255,220,235,0.55)');
+      }
+
+      for (let x=0; x<grid.cols; x++) {
+        roseCell(gx + x*cs, gy + 0*cs);
+        roseCell(gx + x*cs, gy + (grid.rows-1)*cs);
+      }
+      for (let y=1; y<grid.rows-1; y++) {
+        roseCell(gx + 0*cs, gy + y*cs);
+        roseCell(gx + (grid.cols-1)*cs, gy + y*cs);
+      }
+    }
+
+    function drawSnake(g) {
+      const gx = grid.x, gy = grid.y, cs = grid.cell;
+
+      for (let i=snake.length-1; i>=0; i--) {
+        const s = snake[i];
+        const px = gx + s.x*cs;
+        const py = gy + s.y*cs;
+
+        const isHead = (i === 0);
+        const base  = isHead ? '#7e37ff' : '#6b2fe0';
+        const inner = isHead ? '#b18cff' : '#9c77ff';
+
+        // Connected, no gaps
+        drawPixelRect(g, px, py, cs+1, cs+1, base);
+        drawPixelRect(g, px+2, py+2, cs-3, cs-3, inner);
+
+        if (isHead) {
+          const ex = px + (cs/2|0) - 3;
+          const ey = py + (cs/2|0) - 2;
+          drawPixelRect(g, ex, ey, 2, 2, '#200a2a');
+          drawPixelRect(g, ex+5, ey, 2, 2, '#200a2a');
+        }
+      }
+    }
+
+    function drawFood(g, t) {
+      const gx = grid.x, gy = grid.y, cs = grid.cell;
+      const px = gx + food.x*cs + (cs/2|0);
+      const py = gy + food.y*cs + (cs/2|0);
+      const pulse = 0.92 + 0.08*Math.sin(t*6.0);
+      drawPixelHeart(g, px, py, 16, pulse, true);
+    }
+
+    function drawCounter(g) {
+      g.save();
+      g.textAlign = 'left';
+      g.textBaseline = 'top';
+      g.font = `12px "Press Start 2P", monospace`;
+      const text = `❤ ${hearts}/${TARGET}`;
+      g.fillStyle = 'rgba(0,0,0,0.45)';
+      g.fillText(text, 14, 14);
+      g.fillStyle = '#ffffff';
+      g.fillText(text, 12, 12);
+      g.restore();
+    }
+
+    // ====================================================================
+    // Input
+    // ====================================================================
+    function advanceScene() {
+      if (scene === SCENE.MENU_CLOSED) scene = SCENE.MENU_OPEN;
+      else if (scene === SCENE.MENU_OPEN) { scene = SCENE.GAME; resetGame(); }
+      else if (scene === SCENE.SCROLL_ROLLED) scene = SCENE.SCROLL_OPEN;
+      updateHudVisibility();
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (scene !== SCENE.GAME) advanceScene();
+    });
+
+    function setDirection(dx, dy) {
+      if (dx === -dir.x && dy === -dir.y) return;
+      nextDir = {x:dx, y:dy};
+    }
+
+    const dpad = document.getElementById('dpad');
+    dpad.addEventListener('pointerdown', (e) => {
+      const btn = e.target.closest('button[data-dir]');
+      if (!btn) return;
+      e.preventDefault();
+      const d = btn.dataset.dir;
+      if (d === 'up') setDirection(0,-1);
+      if (d === 'down') setDirection(0, 1);
+      if (d === 'left') setDirection(-1,0);
+      if (d === 'right') setDirection(1,0);
+    });
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key;
+      if (k === 'ArrowUp') setDirection(0,-1);
+      else if (k === 'ArrowDown') setDirection(0, 1);
+      else if (k === 'ArrowLeft') setDirection(-1,0);
+      else if (k === 'ArrowRight') setDirection(1,0);
+      if ((k === 'Enter' || k === ' ') && scene !== SCENE.GAME) advanceScene();
+    });
+
+    // ====================================================================
+    // Render
+    // ====================================================================
+    function drawScene(t) {
+      // FULL background: animated grass with flowers in wind
+      drawGrassBackground(ctx, t);
+
+      // Overlay scenes (only the game grid/border/letters are separate)
+      if (scene === SCENE.MENU_CLOSED) {
+        drawClosedEnvelope(ctx);
+      } else if (scene === SCENE.MENU_OPEN) {
+        drawOpenLetterScreen(ctx);
+      } else if (scene === SCENE.GAME) {
+        drawGridFloor(ctx);
+        drawRoseBorder(ctx);
+        drawFood(ctx, t);
+        drawSnake(ctx);
+        drawCounter(ctx);
+      } else if (scene === SCENE.SCROLL_ROLLED) {
+        drawRolledScroll(ctx);
+      } else if (scene === SCENE.SCROLL_OPEN) {
+        drawOpenScroll(ctx);
+      }
+    }
+
+    function loop(ms) {
+      const t = ms / 1000;
+      const dt = Math.min(0.05, t - lastTime || 0);
+      lastTime = t;
+
+      if (scene === SCENE.GAME) {
+        acc += dt;
+        while (acc >= STEP) {
+          acc -= STEP;
+          stepGame();
+          if (scene !== SCENE.GAME) { acc = 0; break; }
+        }
+      }
+
+      drawScene(t);
+      requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
