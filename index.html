@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <title>Valentine Snake</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&display=swap" rel="stylesheet">
+
+  <style>
+    :root { --safe-top: env(safe-area-inset-top, 0px); --safe-bot: env(safe-area-inset-bottom, 0px); }
+    html, body { height:100%; margin:0; background:#07040b; overflow:hidden; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; }
+    #wrap { position:relative; height:100%; width:100%; display:grid; place-items:center; }
+    canvas {
+      width:min(100vw, calc(100vh * (360/640)));
+      height:min(100vh, calc(100vw * (640/360)));
+      image-rendering:pixelated;
+      background:#000;
+      border-radius:16px;
+      box-shadow:0 18px 60px rgba(0,0,0,.55);
+    }
+
+    #topHud{
+      position:absolute;
+      top:calc(10px + var(--safe-top));
+      left:0; right:0;
+      display:flex;
+      justify-content:center;
+      pointer-events:none;
+      z-index:5;
+    }
+    #counter{
+      background:rgba(0,0,0,.35);
+      border:1px solid rgba(255,255,255,.10);
+      padding:6px 10px;
+      border-radius:10px;
+      color:#fff;
+      font-weight:1000;
+      text-shadow:0 2px 10px rgba(0,0,0,.7);
+      letter-spacing:.2px;
+    }
+
+    #dpad{
+      position:absolute;
+      left:14px;
+      bottom:calc(14px + var(--safe-bot));
+      width:150px;
+      height:150px;
+      display:none;
+      z-index:6;
+      pointer-events:auto;
+      touch-action:none;
+    }
+    .dbtn{
+      position:absolute;
+      width:52px; height:52px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.18);
+      background:rgba(0,0,0,.35);
+      color:#fff;
+      font-weight:1000;
+      font-size:20px;
+      display:grid;
+      place-items:center;
+      user-select:none;
+      -webkit-user-select:none;
+    }
+    .dbtn:active{ transform:scale(0.98); background:rgba(255,255,255,.10); }
+    #up    { left:49px; top:0px; }
+    #down  { left:49px; top:98px; }
+    #left  { left:0px;  top:49px; }
+    #right { left:98px; top:49px; }
+
+    #hint{
+      position:absolute;
+      right:14px;
+      bottom:calc(14px + var(--safe-bot));
+      background:rgba(0,0,0,.35);
+      border:1px solid rgba(255,255,255,.10);
+      padding:8px 10px;
+      border-radius:12px;
+      color:#fff;
+      font-weight:900;
+      font-size:12px;
+      text-shadow:0 2px 10px rgba(0,0,0,.7);
+      pointer-events:none;
+      display:none;
+      z-index:6;
+      max-width:160px;
+    }
+  </style>
+</head>
+
+<body>
+<div id="wrap">
+  <canvas id="c" width="360" height="640"></canvas>
+
+  <div id="topHud">
+    <div id="counter">❤ 0/3</div>
+  </div>
+
+  <div id="dpad">
+    <div class="dbtn" id="up">▲</div>
+    <div class="dbtn" id="down">▼</div>
+    <div class="dbtn" id="left">◀</div>
+    <div class="dbtn" id="right">▶</div>
+  </div>
+
+  <div id="hint">Use arrows to move.</div>
+</div>
+
+<script>
+(() => {
+  const NAME = "Yara";
+  const TARGET = 3; // test ending fast
+
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha:false });
+  ctx.imageSmoothingEnabled = false;
+  const W = canvas.width, H = canvas.height;
+
+  const counterEl = document.getElementById("counter");
+  const dpad = document.getElementById("dpad");
+  const hint = document.getElementById("hint");
+
+  // States
+  let state = "menuClosed"; // menuClosed -> menuOpen -> game -> scrollClosed -> scrollOpen
+
+  // Grid
+  const COLS = 20;
+  const ROWS = 24;
+  const CELL = 18;
+  const fieldX = 0;
+  const fieldY = 168;
+  const fieldW = COLS * CELL;
+  const fieldH = ROWS * CELL;
+
+  // Play area inside 1-cell rose border
+  const MIN_X = 1;
+  const MAX_X = COLS - 2;
+  const MIN_Y = 1;
+  const MAX_Y = ROWS - 2;
+
+  // Snake
+  let snake, dir, nextDir, food, score, won;
+
+  function updateCounter(){ counterEl.textContent = `❤ ${score}/${TARGET}`; }
+
+  function resetGame(){
+    snake = [{x:10,y:12},{x:9,y:12},{x:8,y:12}];
+    dir = {x:1,y:0};
+    nextDir = {x:1,y:0};
+    score = 0;
+    won = false;
+    food = spawnFood();
+    updateCounter();
+  }
+
+  function spawnFood(){
+    while(true){
+      const fx = MIN_X + ((Math.random() * (MAX_X - MIN_X + 1))|0);
+      const fy = MIN_Y + ((Math.random() * (MAX_Y - MIN_Y + 1))|0);
+      if(!snake?.some(s => s.x===fx && s.y===fy)) return {x:fx,y:fy};
+    }
+  }
+
+  function setDir(x,y){
+    if(x === -dir.x && y === -dir.y) return;
+    nextDir = {x,y};
+  }
+
+  // D-pad
+  function bindBtn(id, x, y){
+    const el = document.getElementById(id);
+    const press = (e) => { e.preventDefault(); if(state==="game") setDir(x,y); };
+    el.addEventListener("pointerdown", press);
+    el.addEventListener("touchstart", press, {passive:false});
+  }
+  bindBtn("up", 0,-1);
+  bindBtn("down", 0, 1);
+  bindBtn("left",-1, 0);
+  bindBtn("right", 1, 0);
+
+  // Tap flow
+  canvas.addEventListener("click", () => {
+    if(state === "menuClosed") { state = "menuOpen"; return; }
+    if(state === "menuOpen") {
+      state = "game";
+      dpad.style.display = "block";
+      hint.style.display = "block";
+      resetGame();
+      return;
+    }
+    if(state === "scrollClosed") { state = "scrollOpen"; return; }
+  }, {passive:true});
+
+  // ---- Pixel drawing helpers
+  function px(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x|0,y|0,w|0,h|0); }
+
+  // Static “pretty” pixel background (no particles)
+  function drawPrettyBackground(){
+    // sky bands
+    px(0,0,W,58,"#2a0b45");
+    px(0,58,W,58,"#ff5fa8");
+    px(0,116,W,52,"#ffb07a");
+
+    // sun
+    px((W/2-18), 48, 36, 36, "rgba(255,255,255,0.92)");
+    px((W/2-10), 58, 20, 20, "rgba(255,255,255,0.92)");
+
+    // chunky clouds (static)
+    const clouds = [
+      {x:34,y:86},{x:118,y:96},{x:210,y:86},{x:278,y:98}
+    ];
+    for(const c of clouds){
+      px(c.x,c.y,42,14,"rgba(255,255,255,0.24)");
+      px(c.x+10,c.y-10,44,14,"rgba(255,255,255,0.20)");
+      px(c.x+26,c.y+8,30,12,"rgba(255,255,255,0.16)");
+    }
+
+    // sakura corners (static)
+    drawSakuraCorner(true);
+    drawSakuraCorner(false);
+
+    // title band
+    px(12, 120, W-24, 34, "rgba(0,0,0,0.20)");
+  }
+
+  function drawSakuraCorner(left){
+    const baseX = left ? 0 : W-140;
+    const baseY = 0;
+
+    // thick branch
+    for(let i=0;i<10;i++){
+      const x = baseX + (left ? i*12 : 140 - i*12);
+      const y = baseY + i*5;
+      px(x, y, 28, 8, "#241022");
+    }
+
+    // blossoms (deterministic-ish positions)
+    const spots = [
+      [18,18],[40,26],[62,20],[84,34],[22,46],[44,54],[70,48],[96,58],[30,70],[66,72],
+      [12,86],[54,86],[92,84],[116,74],[120,30],[110,14],[8,34],[104,44]
+    ];
+    for(let i=0;i<spots.length;i++){
+      let bx = baseX + spots[i][0];
+      let by = baseY + spots[i][1];
+      const col = (i%3===0) ? "#ffb7d6" : "#ff7bb7";
+      px(bx, by, 10, 10, col);
+      px(bx+4, by+3, 2, 2, "rgba(255,255,255,0.32)");
+    }
+  }
+
+  function drawGridFloor(){
+    // base
+    px(fieldX, fieldY, fieldW, fieldH, "#ffb0d7");
+
+    // low opacity grid lines
+    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.lineWidth = 1;
+    for(let c=0;c<=COLS;c++){
+      const x = fieldX + c*CELL + 0.5;
+      ctx.beginPath(); ctx.moveTo(x, fieldY); ctx.lineTo(x, fieldY+fieldH); ctx.stroke();
+    }
+    for(let r=0;r<=ROWS;r++){
+      const y = fieldY + r*CELL + 0.5;
+      ctx.beginPath(); ctx.moveTo(fieldX, y); ctx.lineTo(fieldX+fieldW, y); ctx.stroke();
+    }
+  }
+
+  // 1-cell rose bush ring INSIDE the grid
+  function drawRoseRing(){
+    for(let y=0;y<ROWS;y++){
+      for(let x=0;x<COLS;x++){
+        const isBorder = (x===0 || x===COLS-1 || y===0 || y===ROWS-1);
+        if(!isBorder) continue;
+        const pxX = fieldX + x*CELL;
+        const pxY = fieldY + y*CELL;
+
+        // leafy base
+        px(pxX, pxY, CELL, CELL, "#2f7a52");
+
+        // leaf texture
+        px(pxX+2, pxY+3, 3, 3, "#3aa86a");
+        px(pxX+10, pxY+11, 3, 3, "#1f5f40");
+        px(pxX+6, pxY+7, 2, 2, "#3aa86a");
+
+        // rose bud
+        px(pxX+11, pxY+4, 6, 6, "#ff2d6f");
+        px(pxX+13, pxY+6, 2, 2, "rgba(255,255,255,0.35)");
+
+        // subtle outline
+        ctx.strokeStyle = "rgba(0,0,0,0.18)";
+        ctx.strokeRect(pxX+0.5, pxY+0.5, CELL-1, CELL-1);
+      }
+    }
+  }
+
+  function heart(x,y,size,t){
+    const p = 1 + Math.sin(t*0.01)*0.08;
+    const s = size*p;
+    px(x - s*0.50, y - s*0.20, s*0.35, s*0.35, "#ff2d6f");
+    px(x + s*0.15, y - s*0.20, s*0.35, s*0.35, "#ff2d6f");
+    px(x - s*0.50, y + s*0.15, s*1.00, s*0.35, "#ff2d6f");
+    px(x - s*0.15, y + s*0.50, s*0.30, s*0.30, "#ff2d6f");
+    px(x - s*0.25, y - s*0.08, s*0.12, s*0.12, "rgba(255,255,255,0.35)");
+  }
+
+  function drawFood(t){
+    const cx = fieldX + food.x*CELL + CELL/2;
+    const cy = fieldY + food.y*CELL + CELL/2;
+    heart(cx, cy, 12, t);
+  }
+
+  function drawSnake(){
+    for(let i=snake.length-1;i>=0;i--){
+      const s = snake[i];
+      const x = fieldX + s.x*CELL;
+      const y = fieldY + s.y*CELL;
+      const head = (i===0);
+
+      px(x, y, CELL, CELL, head ? "#a36bff" : "#6f2cff");
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.strokeRect(x+0.5, y+0.5, CELL-1, CELL-1);
+
+      if(head){
+        px(x+5, y+6, 4, 4, "rgba(255,255,255,0.95)");
+        px(x+CELL-9, y+6, 4, 4, "rgba(255,255,255,0.95)");
+        px(x+6, y+7, 2, 2, "#1b0f22");
+        px(x+CELL-8, y+7, 2, 2, "#1b0f22");
+        px(x+7, y+CELL-7, CELL-14, 2, "rgba(0,0,0,0.22)");
+      }
+    }
+  }
+
+  // Menus
+  function drawClosedLetter(t){
+    const cx = W/2, cy = 360;
+    const bob = (Math.sin(t*0.003)*6)|0;
+
+    px(cx-92, cy+70+bob, 184, 10, "rgba(0,0,0,0.25)");
+    px(cx-96, cy-46+bob, 192, 128, "#f2d7b7");
+    ctx.strokeStyle = "rgba(0,0,0,0.30)";
+    ctx.strokeRect(cx-96+0.5, cy-46+bob+0.5, 191, 127);
+
+    ctx.strokeStyle = "rgba(0,0,0,0.22)";
+    ctx.beginPath();
+    ctx.moveTo(cx-96, cy-46+bob); ctx.lineTo(cx, cy+12+bob); ctx.lineTo(cx+96, cy-46+bob);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx-96, cy+82+bob); ctx.lineTo(cx, cy+12+bob); ctx.lineTo(cx+96, cy+82+bob);
+    ctx.stroke();
+
+    heart(cx, cy+16+bob, 18, t);
+
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "16px system-ui";
+    ctx.fillText("Tap to open…", (W/2-60)|0, 146);
+  }
+
+  function drawOpenLetter(t){
+    const cx = W/2, cy = 380;
+    const bob = (Math.sin(t*0.003)*4)|0;
+
+    px(cx-118, cy+26+bob, 236, 106, "#f2d7b7");
+    ctx.strokeStyle = "rgba(0,0,0,0.28)";
+    ctx.strokeRect(cx-118+0.5, cy+26+bob+0.5, 235, 105);
+
+    px(cx-102, cy-140+bob, 204, 180, "#fff2dc");
+    ctx.strokeStyle = "rgba(0,0,0,0.16)";
+    ctx.strokeRect(cx-102+0.5, cy-140+bob+0.5, 203, 179);
+
+    ctx.fillStyle = "#e7caa8";
+    ctx.beginPath();
+    ctx.moveTo(cx-118, cy+26+bob);
+    ctx.lineTo(cx, cy-34+bob);
+    ctx.lineTo(cx+118, cy+26+bob);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.22)";
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(30,10,25,0.95)";
+    ctx.font = "36px 'Great Vibes', cursive";
+    ctx.fillText(`Dear ${NAME},`, cx, cy-82+bob);
+    ctx.font = "28px 'Great Vibes', cursive";
+    ctx.fillText("I made this little game…", cx, cy-44+bob);
+    ctx.fillText(`Collect ${TARGET} hearts 💖`, cx, cy-12+bob);
+    ctx.textAlign = "left";
+
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "14px system-ui";
+    ctx.fillText("Tap to start", (W/2-38)|0, 146);
+  }
+
+  // Scroll ending
+  function drawScrollClosed(t){
+    px(0,0,W,H,"rgba(255,90,166,0.10)");
+
+    const cx = W/2, cy = 360;
+    const bob = (Math.sin(t*0.003)*5)|0;
+
+    px(cx-80, cy-20+bob, 160, 70, "#e7caa8");
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    ctx.strokeRect(cx-80+0.5, cy-20+bob+0.5, 159, 69);
+
+    px(cx-92, cy-10+bob, 12, 50, "#caa37b");
+    px(cx+80, cy-10+bob, 12, 50, "#caa37b");
+
+    px(cx-18, cy+6+bob, 36, 12, "#ff2d6f");
+    px(cx-10, cy-2+bob, 20, 28, "rgba(255,255,255,0.12)");
+
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "16px system-ui";
+    ctx.fillText("You did it. Tap to open…", (W/2-86)|0, 146);
+  }
+
+  function drawScrollOpen(){
+    px(0,0,W,H,"rgba(255,90,166,0.12)");
+
+    px(34, 230, W-68, 240, "#fff2dc");
+    ctx.strokeStyle = "rgba(0,0,0,0.20)";
+    ctx.strokeRect(34.5, 230.5, W-69, 239);
+
+    px(26, 230, 10, 240, "#caa37b");
+    px(W-36, 230, 10, 240, "#caa37b");
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(30,10,25,0.95)";
+    ctx.font = "44px 'Great Vibes', cursive";
+    ctx.fillText("Will you be", W/2, 320);
+    ctx.fillText("my Valentine?", W/2, 380);
+    ctx.textAlign = "left";
+  }
+
+  // Game step
+  let acc = 0;
+  const STEP_MS = 110;
+
+  function stepGame(){
+    if(won) return;
+
+    dir = nextDir;
+    const head = snake[0];
+    const nh = { x: head.x + dir.x, y: head.y + dir.y };
+
+    // rose ring is a wall: valid range is 1..COLS-2 and 1..ROWS-2
+    if(nh.x < MIN_X || nh.x > MAX_X || nh.y < MIN_Y || nh.y > MAX_Y){
+      resetGame();
+      return;
+    }
+
+    for(let i=1;i<snake.length;i++){
+      if(snake[i].x === nh.x && snake[i].y === nh.y){
+        resetGame();
+        return;
+      }
+    }
+
+    snake.unshift(nh);
+
+    if(nh.x === food.x && nh.y === food.y){
+      score++;
+      updateCounter();
+      food = spawnFood();
+
+      if(score >= TARGET){
+        won = true;
+        state = "scrollClosed";
+        dpad.style.display = "none";
+        hint.style.display = "none";
+      }
+    } else {
+      snake.pop();
+    }
+  }
+
+  // Loop
+  function loop(t){
+    ctx.clearRect(0,0,W,H);
+
+    // Static background
+    drawPrettyBackground();
+
+    // Grid always there
+    drawGridFloor();
+    drawRoseRing();
+
+    if(state === "menuClosed"){
+      dpad.style.display = "none";
+      hint.style.display = "none";
+      counterEl.textContent = `❤ 0/${TARGET}`;
+      drawClosedLetter(t);
+
+    } else if(state === "menuOpen"){
+      dpad.style.display = "none";
+      hint.style.display = "none";
+      counterEl.textContent = `❤ 0/${TARGET}`;
+      drawOpenLetter(t);
+
+    } else if(state === "game"){
+      dpad.style.display = "block";
+      hint.style.display = "block";
+
+      acc += 16.7;
+      if(acc >= STEP_MS){ acc = 0; stepGame(); }
+
+      drawFood(t);
+      drawSnake();
+
+    } else if(state === "scrollClosed"){
+      // freeze last frame with subtle tint
+      drawFood(t);
+      drawSnake();
+      px(0,0,W,H,"rgba(255,90,166,0.10)");
+      drawScrollClosed(t);
+
+    } else if(state === "scrollOpen"){
+      drawScrollOpen();
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  resetGame();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
